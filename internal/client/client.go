@@ -91,6 +91,12 @@ func (c *Client) SetAgentID(id string) {
 	c.agentID = id
 }
 
+// HTTPClient returns the underlying HTTP client for use by other components.
+// This allows components like the sysinfo reporter to reuse the configured client.
+func (c *Client) HTTPClient() *http.Client {
+	return c.httpClient
+}
+
 // SendHeartbeat sends a heartbeat to the server to indicate the agent is alive.
 // This should be called periodically (e.g., every 60 seconds) to maintain
 // ACTIVE status. The server uses lastSeen to detect offline agents.

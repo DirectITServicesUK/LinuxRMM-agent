@@ -24,13 +24,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/doughall/linuxrmm/agent/internal/sysinfo"
 	"github.com/hashicorp/go-retryablehttp"
 )
 
 // registrationRequest is the JSON body sent to POST /api/agents/register.
 type registrationRequest struct {
-	DeviceToken string `json:"device_token"`
-	Hostname    string `json:"hostname"`
+	DeviceToken string                `json:"device_token"`
+	Hostname    string                `json:"hostname"`
+	SystemInfo  *sysinfo.SystemInfo   `json:"system_info,omitempty"`
 }
 
 // registrationResponse is the JSON response from POST /api/agents/register.
@@ -69,15 +71,16 @@ var ErrBadRequest = fmt.Errorf("bad registration request")
 
 // Register registers a new agent with the RMM server.
 //
-// It sends the device token and hostname to the server and receives credentials
-// upon successful registration. The credentials should be immediately saved to
-// the config file using config.Save().
+// It sends the device token, hostname, and system information to the server
+// and receives credentials upon successful registration. The credentials should
+// be immediately saved to the config file using config.Save().
 //
 // Parameters:
 //   - ctx: Context for cancellation/timeout
 //   - serverURL: Base URL of the RMM server (e.g., "https://rmm.example.com")
 //   - deviceToken: One-time registration token from the server
 //   - hostname: This machine's hostname
+//   - sysInfo: System information (OS, platform, hardware details) - can be nil
 //
 // Returns:
 //   - result: All credentials including agent ID, API key, tenant ID, and NATS config
@@ -85,14 +88,15 @@ var ErrBadRequest = fmt.Errorf("bad registration request")
 //
 // Usage:
 //
-//	result, err := client.RegisterFull(ctx, serverURL, token, hostname, logger)
+//	sysInfo, _ := sysinfo.Collect(ctx)
+//	result, err := client.RegisterFull(ctx, serverURL, token, hostname, sysInfo, logger)
 //	if err != nil {
 //	    return err
 //	}
 //	cfg.APIKey = result.APIKey
 //	cfg.TenantID = result.TenantID
 //	config.Save(configPath, cfg)
-func RegisterFull(ctx context.Context, serverURL, deviceToken, hostname string, logger *slog.Logger) (*RegistrationResult, error) {
+func RegisterFull(ctx context.Context, serverURL, deviceToken, hostname string, sysInfo *sysinfo.SystemInfo, logger *slog.Logger) (*RegistrationResult, error) {
 	// Create a dedicated HTTP client for registration (no auth needed)
 	retryClient := retryablehttp.NewClient()
 	retryClient.RetryMax = 3
@@ -108,6 +112,7 @@ func RegisterFull(ctx context.Context, serverURL, deviceToken, hostname string, 
 	reqBody := registrationRequest{
 		DeviceToken: deviceToken,
 		Hostname:    hostname,
+		SystemInfo:  sysInfo,
 	}
 	bodyData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -116,10 +121,19 @@ func RegisterFull(ctx context.Context, serverURL, deviceToken, hostname string, 
 
 	url := serverURL + "/api/agents/register"
 
-	logger.Info("registering with server",
+	// Log registration with system info summary
+	logAttrs := []any{
 		slog.String("url", url),
 		slog.String("hostname", hostname),
-	)
+	}
+	if sysInfo != nil {
+		logAttrs = append(logAttrs,
+			slog.String("os", sysInfo.OS),
+			slog.String("platform", sysInfo.Platform),
+			slog.String("platform_version", sysInfo.PlatformVersion),
+		)
+	}
+	logger.Info("registering with server", logAttrs...)
 
 	// Create request with context
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))

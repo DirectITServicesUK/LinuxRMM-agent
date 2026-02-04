@@ -38,16 +38,17 @@ import (
 	"github.com/doughall/linuxrmm/agent/internal/commands"
 	"github.com/doughall/linuxrmm/agent/internal/config"
 	"github.com/doughall/linuxrmm/agent/internal/logging"
+	natsinternal "github.com/doughall/linuxrmm/agent/internal/nats"
 	"github.com/doughall/linuxrmm/agent/internal/poller"
 	"github.com/doughall/linuxrmm/agent/internal/results"
 	"github.com/doughall/linuxrmm/agent/internal/scheduler"
 	"github.com/doughall/linuxrmm/agent/internal/shutdown"
 	"github.com/doughall/linuxrmm/agent/internal/stats"
+	"github.com/doughall/linuxrmm/agent/internal/sysinfo"
 	"github.com/doughall/linuxrmm/agent/internal/systemd"
 	"github.com/doughall/linuxrmm/agent/internal/updater"
 	"github.com/doughall/linuxrmm/agent/internal/version"
 	"github.com/doughall/linuxrmm/agent/internal/websocket"
-	natsinternal "github.com/doughall/linuxrmm/agent/internal/nats"
 )
 
 // Default shutdown timeout - how long to wait for graceful shutdown
@@ -106,8 +107,27 @@ func main() {
 			os.Exit(1)
 		}
 
+		// Collect system information to send during registration
+		sysInfo, err := sysinfo.Collect(ctx)
+		if err != nil {
+			logger.Warn("failed to collect system info for registration",
+				slog.String("error", err.Error()),
+			)
+			// Continue with nil sysInfo - registration can proceed without it
+		} else {
+			// Add agent version to system info
+			sysInfo.AgentVersion = version.Version
+			logger.Info("collected system info",
+				slog.String("os", sysInfo.OS),
+				slog.String("platform", sysInfo.Platform),
+				slog.String("platform_version", sysInfo.PlatformVersion),
+				slog.String("kernel", sysInfo.KernelVersion),
+				slog.String("arch", sysInfo.Arch),
+			)
+		}
+
 		// Register with server using device token (use RegisterFull for NATS creds)
-		regResult, err := client.RegisterFull(ctx, cfg.ServerURL, cfg.DeviceToken, hostname, logger)
+		regResult, err := client.RegisterFull(ctx, cfg.ServerURL, cfg.DeviceToken, hostname, sysInfo, logger)
 		if err != nil {
 			logger.Error("registration failed", "error", err)
 			os.Exit(1)
@@ -250,10 +270,24 @@ func main() {
 	// The reporter runs independently of the poller, collecting and sending
 	// system metrics every 60 seconds
 	collector := stats.NewCollector(logger)
-	reporter := stats.NewReporter(collector, httpClient, logger, statsInterval)
+	statsReporter := stats.NewReporter(collector, httpClient, logger, statsInterval)
 
-	// Register reporter for shutdown (stats can stop before poller since not critical)
-	coordinator.Register("stats-reporter", reporter)
+	// Register stats reporter for shutdown (stats can stop before poller since not critical)
+	coordinator.Register("stats-reporter", statsReporter)
+
+	// Create system info reporter
+	// Reports OS, hardware, platform info at startup and periodically (hourly)
+	// to detect system changes like OS upgrades
+	sysinfoReporter := sysinfo.NewReporter(
+		cfg.ServerURL,
+		cfg.APIKey,
+		cfg.AgentID,
+		version.Version,
+		httpClient.HTTPClient(),
+		logger,
+		sysinfo.DefaultReportInterval,
+	)
+	coordinator.Register("sysinfo-reporter", sysinfoReporter)
 
 	// Create deduplicator shared across all command delivery channels
 	dedup := commandHandler.GetDeduplicator()
@@ -288,7 +322,10 @@ func main() {
 			natsPublisher = natsinternal.NewPublisher(natsClient, logger)
 
 			// Wire stats reporter to use NATS for publishing
-			reporter.SetStatsPublisher(natsPublisher)
+			statsReporter.SetStatsPublisher(natsPublisher)
+
+			// Wire sysinfo reporter to use NATS for publishing
+			sysinfoReporter.SetPublisher(natsPublisher)
 
 			// Wire poller to use NATS for heartbeats
 			poll.SetHeartbeatPublisher(natsPublisher)
@@ -354,7 +391,11 @@ func main() {
 
 	// Start the stats reporter in a goroutine
 	// Reporter runs independently of poller - collects and sends system metrics
-	go reporter.Run(ctx)
+	go statsReporter.Run(ctx)
+
+	// Start the sysinfo reporter in a goroutine
+	// Reports system info at startup and hourly to detect OS/hardware changes
+	go sysinfoReporter.Run(ctx)
 
 	// Start real-time communication client (NATS or WebSocket)
 	if natsClient != nil {

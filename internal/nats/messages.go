@@ -148,3 +148,6 @@ type UninstallConfirmMessage struct {
 	Confirmed bool   `json:"confirmed"`
 	Timestamp string `json:"timestamp"`
 }
+
+// Note: SystemInfoMessage is defined in internal/sysinfo/reporter.go
+// The NATS publisher uses sysinfo.SystemInfoMessage directly to avoid duplication.

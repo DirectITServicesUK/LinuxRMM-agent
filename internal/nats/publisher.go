@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/doughall/linuxrmm/agent/internal/stats"
+	"github.com/doughall/linuxrmm/agent/internal/sysinfo"
 	"github.com/nats-io/nats.go"
 )
 
@@ -244,4 +245,24 @@ func (p *Publisher) PublishStatsData(data stats.StatsData) error {
 		Uptime:       data.Uptime,
 	}
 	return p.PublishStats(msg)
+}
+
+// PublishSystemInfo publishes static system information.
+// Uses core NATS since system info is non-critical and changes infrequently.
+// Accepts sysinfo.SystemInfoMessage to satisfy the sysinfo.SysInfoPublisher interface.
+func (p *Publisher) PublishSystemInfo(info *sysinfo.SystemInfoMessage) error {
+	subject := fmt.Sprintf("rmm.%s.sysinfo.%s", p.client.TenantID(), p.client.AgentID())
+
+	msg := MessageEnvelope{
+		Type:      "system_info",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	payloadBytes, err := json.Marshal(info)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+	msg.Payload = payloadBytes
+
+	return p.publish(subject, msg)
 }
