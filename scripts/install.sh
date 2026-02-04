@@ -137,7 +137,8 @@ install_binary() {
     fi
 
     log_info "Installing binary to $INSTALL_DIR/rmm-agent"
-    install -m 0755 "$BINARY_PATH" "$INSTALL_DIR/rmm-agent"
+    # Owned by service user so agent can self-update
+    install -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$BINARY_PATH" "$INSTALL_DIR/rmm-agent"
 }
 
 # Install the helper binary
