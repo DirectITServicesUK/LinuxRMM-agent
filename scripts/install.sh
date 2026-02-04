@@ -23,7 +23,7 @@
 set -e
 
 # Configuration
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="/opt/rmm-agent/bin"
 CONFIG_DIR="/etc/rmm-agent"
 SERVICE_FILE="/etc/systemd/system/rmm-agent.service"
 STATE_DIR="/var/lib/rmm-agent"
@@ -136,9 +136,17 @@ install_binary() {
         exit 1
     fi
 
+    # Create install directory owned by service user (for self-update capability)
+    log_info "Creating install directory: $INSTALL_DIR"
+    install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_DIR"
+
     log_info "Installing binary to $INSTALL_DIR/rmm-agent"
     # Owned by service user so agent can self-update
     install -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$BINARY_PATH" "$INSTALL_DIR/rmm-agent"
+
+    # Create symlink in /usr/local/bin for convenience
+    log_info "Creating symlink: /usr/local/bin/rmm-agent -> $INSTALL_DIR/rmm-agent"
+    ln -sf "$INSTALL_DIR/rmm-agent" /usr/local/bin/rmm-agent
 }
 
 # Install the helper binary
@@ -168,8 +176,9 @@ install_helper() {
         return
     fi
 
-    log_info "Installing helper binary to $INSTALL_DIR/rmm-agent-helper"
-    install -m 4755 -o root -g root "$HELPER_PATH" "$INSTALL_DIR/rmm-agent-helper"
+    log_info "Installing helper binary to /usr/local/bin/rmm-agent-helper"
+    # Helper stays in /usr/local/bin with setuid root (not in /opt for security)
+    install -m 4755 -o root -g root "$HELPER_PATH" "/usr/local/bin/rmm-agent-helper"
     log_info "Helper installed with setuid root (4755)"
 
     # Create runtime directory for socket

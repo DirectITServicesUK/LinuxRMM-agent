@@ -21,7 +21,7 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/rmm-agent
+ExecStart=/opt/rmm-agent/bin/rmm-agent
 Restart=on-failure
 RestartSec=10s
 StartLimitBurst=4
@@ -43,9 +43,10 @@ ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
 
-# Allow writing to config directory (for api_key persistence)
+# Allow writing to config directory (for api_key persistence) and binary dir (for self-update)
 ReadWritePaths=/etc/rmm-agent
 ReadWritePaths=/var/lib/rmm-agent
+ReadWritePaths=/opt/rmm-agent
 
 # Watchdog - systemd kills service if no ping in 90 seconds
 # Agent must send WATCHDOG=1 every interval/2 (~45 seconds)
