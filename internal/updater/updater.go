@@ -167,15 +167,41 @@ func (u *Updater) ApplyUpdate(ctx context.Context, manifest *Manifest) error {
 
 	// 4. Replace binary
 	// Try atomic rename first (works on same filesystem)
-	// Fall back to copy if rename fails (cross-device link error)
+	// Fall back to copy+rename if rename fails (cross-device link error)
+	// Note: We can't write directly to a running binary ("text file busy"),
+	// but we CAN rename over it, so copy to temp file in same dir then rename.
 	if err := os.Rename(result.TempPath, u.binaryPath); err != nil {
-		u.logger.Debug("rename failed, falling back to copy",
+		u.logger.Debug("rename failed, falling back to copy+rename",
 			slog.String("error", err.Error()),
 		)
-		if err := copyFile(result.TempPath, u.binaryPath); err != nil {
-			return fmt.Errorf("replace binary failed: %w", err)
+
+		// Copy to temp file in same directory as target
+		targetDir := filepath.Dir(u.binaryPath)
+		tmpFile, err := os.CreateTemp(targetDir, ".rmm-agent-update-*")
+		if err != nil {
+			return fmt.Errorf("create temp file for copy: %w", err)
 		}
-		// Remove temp file after successful copy
+		tmpPath := tmpFile.Name()
+		tmpFile.Close()
+
+		if err := copyFile(result.TempPath, tmpPath); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("copy to temp file: %w", err)
+		}
+
+		// Set executable permission before rename
+		if err := os.Chmod(tmpPath, 0755); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("chmod temp file: %w", err)
+		}
+
+		// Atomic rename over the running binary
+		if err := os.Rename(tmpPath, u.binaryPath); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("rename over binary: %w", err)
+		}
+
+		// Remove original temp file
 		os.Remove(result.TempPath)
 	}
 
