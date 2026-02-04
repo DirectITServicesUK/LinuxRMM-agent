@@ -167,41 +167,28 @@ func (u *Updater) ApplyUpdate(ctx context.Context, manifest *Manifest) error {
 
 	// 4. Replace binary
 	// Try atomic rename first (works on same filesystem)
-	// Fall back to copy+rename if rename fails (cross-device link error)
-	// Note: We can't write directly to a running binary ("text file busy"),
-	// but we CAN rename over it, so copy to temp file in same dir then rename.
+	// Fall back to remove+copy if rename fails (cross-device link error)
 	if err := os.Rename(result.TempPath, u.binaryPath); err != nil {
-		u.logger.Debug("rename failed, falling back to copy+rename",
+		u.logger.Debug("rename failed, falling back to remove+copy",
 			slog.String("error", err.Error()),
 		)
 
-		// Copy to temp file in same directory as target
-		targetDir := filepath.Dir(u.binaryPath)
-		tmpFile, err := os.CreateTemp(targetDir, ".rmm-agent-update-*")
-		if err != nil {
-			return fmt.Errorf("create temp file for copy: %w", err)
-		}
-		tmpPath := tmpFile.Name()
-		tmpFile.Close()
-
-		if err := copyFile(result.TempPath, tmpPath); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("copy to temp file: %w", err)
+		// Can't write to running binary ("text file busy"), but CAN remove it.
+		// Remove the old binary first, then copy the new one.
+		if err := os.Remove(u.binaryPath); err != nil {
+			return fmt.Errorf("remove old binary: %w", err)
 		}
 
-		// Set executable permission before rename
-		if err := os.Chmod(tmpPath, 0755); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("chmod temp file: %w", err)
+		if err := copyFile(result.TempPath, u.binaryPath); err != nil {
+			return fmt.Errorf("copy new binary: %w", err)
 		}
 
-		// Atomic rename over the running binary
-		if err := os.Rename(tmpPath, u.binaryPath); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("rename over binary: %w", err)
+		// Set executable permission
+		if err := os.Chmod(u.binaryPath, 0755); err != nil {
+			return fmt.Errorf("chmod new binary: %w", err)
 		}
 
-		// Remove original temp file
+		// Remove staging temp file
 		os.Remove(result.TempPath)
 	}
 
