@@ -44,12 +44,15 @@ func SetupLogger(level string) *slog.Logger {
 			// Shorten source paths by removing the module prefix
 			if a.Key == slog.SourceKey {
 				if source, ok := a.Value.Any().(*slog.Source); ok {
-					// Extract just the relative path from internal/ onwards
+					// Shorten file path: extract from internal/ onwards
 					if idx := strings.Index(source.File, "internal/"); idx != -1 {
 						source.File = source.File[idx:]
 					} else {
-						// Fallback to just the filename
 						source.File = filepath.Base(source.File)
+					}
+					// Shorten function name: extract from internal/ onwards
+					if idx := strings.Index(source.Function, "internal/"); idx != -1 {
+						source.Function = source.Function[idx:]
 					}
 				}
 			}
