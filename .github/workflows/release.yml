@@ -55,7 +55,7 @@ jobs:
         run: |
           go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o rmm-agent-linux-amd64 \
-            ./cmd/agent
+            ./cmd/rmm-agent
 
       - name: Build Linux arm64
         env:
@@ -65,7 +65,7 @@ jobs:
         run: |
           go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o rmm-agent-linux-arm64 \
-            ./cmd/agent
+            ./cmd/rmm-agent
 
       - name: Generate checksums
         run: |
