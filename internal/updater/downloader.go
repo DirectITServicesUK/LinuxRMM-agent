@@ -40,8 +40,10 @@ type DownloadResult struct {
 // Download downloads a binary from the given URL, verifies its checksum,
 // and returns the path to the verified temp file.
 //
-// The temp file is created in the same directory as targetPath to ensure
-// atomic rename will work (same filesystem requirement).
+// The temp file is created in a staging directory (defaults to /var/lib/rmm-agent
+// or system temp) rather than the target directory. This allows updates even when
+// the agent doesn't have write permission to the target directory (only needs
+// write permission to the target file itself for the final rename).
 //
 // Caller is responsible for either:
 //   - Renaming the temp file to replace the target (on success)
@@ -55,9 +57,13 @@ func (d *Downloader) Download(ctx context.Context, url string, targetPath string
 		slog.String("target", targetPath),
 	)
 
-	// Create temp file in same directory as target (critical for atomic rename)
-	targetDir := filepath.Dir(targetPath)
-	tmpFile, err := os.CreateTemp(targetDir, ".rmm-agent-update-*")
+	// Create temp file in staging directory
+	// Try /var/lib/rmm-agent first (owned by rmm-agent user), fall back to system temp
+	stagingDir := "/var/lib/rmm-agent"
+	if _, err := os.Stat(stagingDir); os.IsNotExist(err) {
+		stagingDir = os.TempDir()
+	}
+	tmpFile, err := os.CreateTemp(stagingDir, ".rmm-agent-update-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}

@@ -6,6 +6,7 @@ package updater
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -165,10 +166,18 @@ func (u *Updater) ApplyUpdate(ctx context.Context, manifest *Manifest) error {
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
 
-	// 4. Atomic replacement via rename
-	// This is the critical operation - rename is atomic on Linux
+	// 4. Replace binary
+	// Try atomic rename first (works on same filesystem)
+	// Fall back to copy if rename fails (cross-device link error)
 	if err := os.Rename(result.TempPath, u.binaryPath); err != nil {
-		return fmt.Errorf("atomic replace failed: %w", err)
+		u.logger.Debug("rename failed, falling back to copy",
+			slog.String("error", err.Error()),
+		)
+		if err := copyFile(result.TempPath, u.binaryPath); err != nil {
+			return fmt.Errorf("replace binary failed: %w", err)
+		}
+		// Remove temp file after successful copy
+		os.Remove(result.TempPath)
 	}
 
 	// Clear temp path so defer doesn't try to remove it
@@ -228,3 +237,39 @@ func (u *Updater) GetChecker() *Checker {
 }
 
 // Note: WasRecentUpdate and ClearUpdateMarker are defined in health.go
+
+// copyFile copies src to dst, preserving permissions.
+// Used as fallback when rename fails due to cross-device link.
+func copyFile(src, dst string) error {
+	// Open source file
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer srcFile.Close()
+
+	// Get source file info for permissions
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return fmt.Errorf("stat source: %w", err)
+	}
+
+	// Create destination file (truncate if exists)
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return fmt.Errorf("create destination: %w", err)
+	}
+	defer dstFile.Close()
+
+	// Copy contents
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return fmt.Errorf("copy contents: %w", err)
+	}
+
+	// Sync to disk
+	if err := dstFile.Sync(); err != nil {
+		return fmt.Errorf("sync destination: %w", err)
+	}
+
+	return nil
+}
