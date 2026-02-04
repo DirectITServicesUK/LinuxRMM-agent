@@ -141,16 +141,37 @@ jobs:
 
           echo "Notifying RMM server of release v${{ steps.version.outputs.version }}..."
 
-          curl -X POST "${RMM_SERVER_URL}/api/agent-releases/notify" \
-            -H "Content-Type: application/json" \
-            -H "X-Release-Token: ${RMM_RELEASE_WEBHOOK_SECRET}" \
-            -d "{
-              \"version\": \"${{ steps.version.outputs.version }}\",
-              \"checksums\": {
-                \"linux-amd64\": \"${AMD64_SHA}\",
-                \"linux-arm64\": \"${ARM64_SHA}\"
-              }
-            }" \
-            --fail --silent --show-error
+          # Retry up to 5 times with exponential backoff
+          max_attempts=5
+          attempt=1
+          delay=5
 
-          echo "Server notified successfully - rollouts will be auto-created"
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt of $max_attempts..."
+
+            if curl -X POST "${RMM_SERVER_URL}/api/agent-releases/notify" \
+              -H "Content-Type: application/json" \
+              -H "X-Release-Token: ${RMM_RELEASE_WEBHOOK_SECRET}" \
+              -d "{
+                \"version\": \"${{ steps.version.outputs.version }}\",
+                \"checksums\": {
+                  \"linux-amd64\": \"${AMD64_SHA}\",
+                  \"linux-arm64\": \"${ARM64_SHA}\"
+                }
+              }" \
+              --fail --silent --show-error; then
+              echo "Server notified successfully - rollouts will be auto-created"
+              exit 0
+            fi
+
+            if [ $attempt -lt $max_attempts ]; then
+              echo "Request failed, retrying in ${delay}s..."
+              sleep $delay
+              delay=$((delay * 2))
+            fi
+
+            attempt=$((attempt + 1))
+          done
+
+          echo "Failed to notify server after $max_attempts attempts"
+          exit 1
