@@ -19,6 +19,7 @@ package logging
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -39,6 +40,21 @@ func SetupLogger(level string) *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level:     slogLevel,
 		AddSource: true, // Include file:line for debugging
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			// Shorten source paths by removing the module prefix
+			if a.Key == slog.SourceKey {
+				if source, ok := a.Value.Any().(*slog.Source); ok {
+					// Extract just the relative path from internal/ onwards
+					if idx := strings.Index(source.File, "internal/"); idx != -1 {
+						source.File = source.File[idx:]
+					} else {
+						// Fallback to just the filename
+						source.File = filepath.Base(source.File)
+					}
+				}
+			}
+			return a
+		},
 	}
 
 	// JSON handler for structured logging (journald compatible)
