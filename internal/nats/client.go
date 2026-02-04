@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,18 +62,19 @@ type TerminalMessageHandler interface {
 
 // Client manages the NATS connection for the RMM agent.
 type Client struct {
-	config          Config
-	nc              *nats.Conn
-	js              jetstream.JetStream
-	consumer        jetstream.Consumer
-	logger          *slog.Logger
-	handler         MessageHandler
-	terminalHandler TerminalMessageHandler
-	terminalSubs    []*nats.Subscription
-	mu              sync.RWMutex
-	running         bool
-	stopChan        chan struct{}
-	connected       bool
+	config           Config
+	nc               *nats.Conn
+	js               jetstream.JetStream
+	consumer         jetstream.Consumer
+	scheduleConsumer jetstream.Consumer
+	logger           *slog.Logger
+	handler          MessageHandler
+	terminalHandler  TerminalMessageHandler
+	terminalSubs     []*nats.Subscription
+	mu               sync.RWMutex
+	running          bool
+	stopChan         chan struct{}
+	connected        bool
 }
 
 // NewClient creates a new NATS client with the given configuration.
@@ -120,7 +122,7 @@ func (c *Client) Connect(ctx context.Context) error {
 			return kp.Sign(nonce)
 		}),
 		nats.ReconnectWait(time.Second),
-		nats.MaxReconnects(-1), // Unlimited reconnects
+		nats.MaxReconnects(-1),                 // Unlimited reconnects
 		nats.ReconnectBufSize(5 * 1024 * 1024), // 5MB buffer for reconnect
 		nats.PingInterval(30 * time.Second),
 		nats.MaxPingsOutstanding(3),
@@ -172,12 +174,49 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	c.js = js
 
+	// Ensure required streams exist (wait briefly for server initialization)
+	if err := c.waitForStream(ctx, "COMMANDS", 30*time.Second); err != nil {
+		nc.Close()
+		return fmt.Errorf("jetstream stream COMMANDS not ready: %w", err)
+	}
+	if err := c.waitForStream(ctx, "SCHEDULES", 10*time.Second); err != nil {
+		c.logger.Warn("JetStream stream SCHEDULES not ready; schedule assignments via NATS may be unavailable",
+			slog.String("error", err.Error()),
+		)
+	}
+
 	c.logger.Info("NATS connected",
 		slog.String("server", nc.ConnectedUrl()),
 		slog.String("agent_id", c.config.AgentID),
 	)
 
 	return nil
+}
+
+func (c *Client) waitForStream(ctx context.Context, streamName string, timeout time.Duration) error {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		_, err := c.js.Stream(waitCtx, streamName)
+		if err == nil {
+			return nil
+		}
+		if !isStreamNotFound(err) {
+			return err
+		}
+		if waitCtx.Err() != nil {
+			return err
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func isStreamNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "stream not found")
 }
 
 // Run starts the message processing loop.
@@ -194,6 +233,11 @@ func (c *Client) Run(ctx context.Context) {
 	if err := c.setupConsumer(ctx); err != nil {
 		c.logger.Error("Failed to setup consumer", slog.String("error", err.Error()))
 		return
+	}
+	if err := c.setupScheduleConsumer(ctx); err != nil {
+		c.logger.Warn("Failed to setup schedule consumer", slog.String("error", err.Error()))
+	} else {
+		go c.consumeScheduleMessages(ctx)
 	}
 
 	// Set up terminal subscriptions (core NATS for low-latency)
@@ -226,14 +270,14 @@ func (c *Client) setupConsumer(ctx context.Context) error {
 
 	// Create consumer configuration
 	consumerCfg := jetstream.ConsumerConfig{
-		Durable:         consumerName,
-		FilterSubjects:  filterSubjects,
-		AckPolicy:       jetstream.AckExplicitPolicy,
-		AckWait:         60 * time.Second,
-		MaxDeliver:      3,
-		MaxAckPending:   10,
-		DeliverPolicy:   jetstream.DeliverAllPolicy,
-		ReplayPolicy:    jetstream.ReplayInstantPolicy,
+		Durable:        consumerName,
+		FilterSubjects: filterSubjects,
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		AckWait:        60 * time.Second,
+		MaxDeliver:     3,
+		MaxAckPending:  10,
+		DeliverPolicy:  jetstream.DeliverAllPolicy,
+		ReplayPolicy:   jetstream.ReplayInstantPolicy,
 	}
 
 	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerCfg)
@@ -246,6 +290,42 @@ func (c *Client) setupConsumer(ctx context.Context) error {
 	c.logger.Info("NATS consumer ready",
 		slog.String("consumer", consumerName),
 		slog.Any("subjects", filterSubjects),
+	)
+
+	return nil
+}
+
+// setupScheduleConsumer creates or retrieves the durable consumer for schedule assignments.
+func (c *Client) setupScheduleConsumer(ctx context.Context) error {
+	consumerName := fmt.Sprintf("agent-%s-schedules", c.config.AgentID)
+	filterSubject := fmt.Sprintf("rmm.%s.schedules.%s", c.config.TenantID, c.config.AgentID)
+
+	stream, err := c.js.Stream(ctx, "SCHEDULES")
+	if err != nil {
+		return fmt.Errorf("get schedules stream: %w", err)
+	}
+
+	consumerCfg := jetstream.ConsumerConfig{
+		Durable:       consumerName,
+		FilterSubject: filterSubject,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       60 * time.Second,
+		MaxDeliver:    3,
+		MaxAckPending: 10,
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+		ReplayPolicy:  jetstream.ReplayInstantPolicy,
+	}
+
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerCfg)
+	if err != nil {
+		return fmt.Errorf("create schedule consumer: %w", err)
+	}
+
+	c.scheduleConsumer = consumer
+
+	c.logger.Info("NATS schedule consumer ready",
+		slog.String("consumer", consumerName),
+		slog.String("subject", filterSubject),
 	)
 
 	return nil
@@ -397,6 +477,53 @@ func (c *Client) consumeMessages(ctx context.Context) {
 		// Check for fetch errors
 		if msgs.Error() != nil && msgs.Error() != nats.ErrTimeout {
 			c.logger.Warn("Fetch completed with error",
+				slog.String("error", msgs.Error().Error()),
+			)
+		}
+	}
+}
+
+// consumeScheduleMessages processes schedule assignment messages from the schedule consumer.
+func (c *Client) consumeScheduleMessages(ctx context.Context) {
+	if c.scheduleConsumer == nil {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Info("NATS schedule consumer stopping: context cancelled")
+			return
+		case <-c.stopChan:
+			c.logger.Info("NATS schedule consumer stopping: stop requested")
+			return
+		default:
+		}
+
+		msgs, err := c.scheduleConsumer.Fetch(10, jetstream.FetchMaxWait(5*time.Second))
+		if err != nil {
+			if err == context.DeadlineExceeded || err == nats.ErrTimeout {
+				continue
+			}
+			c.logger.Warn("Schedule fetch error", slog.String("error", err.Error()))
+			time.Sleep(time.Second)
+			continue
+		}
+
+		for msg := range msgs.Messages() {
+			if err := c.processMessage(msg); err != nil {
+				c.logger.Error("Schedule message processing failed",
+					slog.String("subject", msg.Subject()),
+					slog.String("error", err.Error()),
+				)
+				msg.Nak()
+			} else {
+				msg.Ack()
+			}
+		}
+
+		if msgs.Error() != nil && msgs.Error() != nats.ErrTimeout {
+			c.logger.Warn("Schedule fetch completed with error",
 				slog.String("error", msgs.Error().Error()),
 			)
 		}
