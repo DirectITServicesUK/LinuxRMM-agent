@@ -6,7 +6,6 @@ package updater
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -237,39 +236,4 @@ func (u *Updater) GetChecker() *Checker {
 }
 
 // Note: WasRecentUpdate and ClearUpdateMarker are defined in health.go
-
-// copyFile copies src to dst, preserving permissions.
-// Used as fallback when rename fails due to cross-device link.
-func copyFile(src, dst string) error {
-	// Open source file
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open source: %w", err)
-	}
-	defer srcFile.Close()
-
-	// Get source file info for permissions
-	srcInfo, err := srcFile.Stat()
-	if err != nil {
-		return fmt.Errorf("stat source: %w", err)
-	}
-
-	// Create destination file (truncate if exists)
-	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
-	if err != nil {
-		return fmt.Errorf("create destination: %w", err)
-	}
-	defer dstFile.Close()
-
-	// Copy contents
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		return fmt.Errorf("copy contents: %w", err)
-	}
-
-	// Sync to disk
-	if err := dstFile.Sync(); err != nil {
-		return fmt.Errorf("sync destination: %w", err)
-	}
-
-	return nil
-}
+// Note: copyFile is defined in backup.go and reused here

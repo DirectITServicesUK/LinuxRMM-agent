@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 )
 
 // Downloader handles downloading and verifying update binaries.
