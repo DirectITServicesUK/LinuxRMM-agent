@@ -158,13 +158,17 @@ func (c *Checker) checkForUpdate(ctx context.Context) {
 // the update manifest for this agent.
 //
 // The server endpoint is: GET /api/updates/manifest
-// The agent sends its version and platform in request headers:
+// The agent authenticates via Bearer token and sends version info in headers:
+//   - Authorization: Bearer {api_key}
 //   - X-Agent-Version: Current semantic version
-//   - X-Agent-Platform: Platform identifier (e.g., "linux-amd64")
 //
-// The server uses this information along with the agent's group membership
-// to determine update eligibility (version comparison, group targeting,
-// staged rollout percentage).
+// The server identifies the agent from the API key and uses the agent's
+// platform and group membership to determine update eligibility (version
+// comparison, group targeting, staged rollout percentage).
+//
+// Response codes:
+//   - 200 OK: Update available, body contains manifest JSON
+//   - 204 No Content: No update available
 func (c *Checker) fetchManifest(ctx context.Context) (Manifest, error) {
 	url := c.serverURL + "/api/updates/manifest"
 
@@ -189,6 +193,11 @@ func (c *Checker) fetchManifest(ctx context.Context) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("manifest request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// 204 No Content means no update available - return empty manifest
+	if resp.StatusCode == http.StatusNoContent {
+		return Manifest{UpdateAvailable: false}, nil
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
