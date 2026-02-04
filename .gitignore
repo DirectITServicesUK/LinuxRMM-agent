@@ -1,0 +1,21 @@
+# Compiled binaries (root level only)
+/rmm-agent
+/rmm-agent-helper
+*.exe
+
+# Build directory
+build/
+
+# Config files with secrets (not examples)
+*.yaml
+!configs/*.yaml.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

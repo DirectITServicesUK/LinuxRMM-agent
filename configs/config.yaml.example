@@ -1,0 +1,57 @@
+# RMM Agent Configuration
+#
+# This file configures the Linux RMM agent. Copy this file to
+# /etc/rmm-agent/config.yaml and update the values for your environment.
+#
+# IMPORTANT: This file contains sensitive credentials and should have
+# restricted permissions: chmod 600 /etc/rmm-agent/config.yaml
+
+# server_url: The base URL of your RMM server.
+# Required. No trailing slash.
+# Example: https://rmm.yourcompany.com
+server_url: "https://rmm.example.com"
+
+# device_token: One-time registration token.
+# Required for initial registration. Generate this token in the RMM server
+# admin panel. After successful registration, this field can be removed
+# (the agent will use api_key instead).
+device_token: "REPLACE_WITH_YOUR_DEVICE_TOKEN"
+
+# api_key: Persistent authentication key.
+# This is automatically populated by the agent after successful registration.
+# Do not modify this field manually.
+api_key: ""
+
+# group: Agent group for organizing devices.
+# Required. Used for grouping devices in the server UI, applying policies,
+# and staged rollout of updates.
+# Examples: "production", "staging", "web-servers", "database-servers"
+group: "default"
+
+# poll_interval: How often (in seconds) to poll the server for commands.
+# Optional. Default: 60 seconds.
+# Shorter intervals = faster command delivery but more server load.
+# Longer intervals = less load but delayed command execution.
+poll_interval: 60
+
+# jitter_seconds: Maximum random delay added to poll interval.
+# Optional. Default: 30 seconds.
+# Prevents thundering herd when many agents poll simultaneously.
+# Actual delay is random between 0 and jitter_seconds.
+jitter_seconds: 30
+
+# log_level: Controls logging verbosity.
+# Optional. Default: "info"
+# Valid values: "debug", "info", "warn", "error"
+# Use "debug" for troubleshooting, "info" for normal operation.
+log_level: "info"
+
+# update_enabled: Controls whether the agent checks for and applies updates.
+# Optional. Default: true
+# Set to false to disable automatic updates (not recommended for production).
+update_enabled: true
+
+# update_check_interval: How often (in hours) to check for updates.
+# Optional. Default: 24 hours (daily)
+# Recommended: 24 hours for production, can be shorter for testing.
+update_check_interval: 24

@@ -1,0 +1,65 @@
+# RMM Agent systemd Service Unit
+#
+# This unit file configures the RMM agent to run as a systemd Type=notify service.
+# The agent notifies systemd when it's ready and sends periodic watchdog pings.
+#
+# Installation: cp rmm-agent.service /etc/systemd/system/
+#               systemctl daemon-reload
+#               systemctl enable rmm-agent.service
+#
+# Configuration: /etc/rmm-agent/config.yaml
+# Logs: journalctl -u rmm-agent -f
+#
+# NOTE: This runs as unprivileged user (rmm-agent). Full privilege separation
+# with root helper is deferred to a later phase (AGNT-06).
+
+[Unit]
+Description=RMM Agent - Remote Monitoring and Management
+Documentation=https://github.com/doughall/linuxrmm
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/rmm-agent
+Restart=on-failure
+RestartSec=10s
+StartLimitBurst=4
+StartLimitInterval=5m
+
+# User and group
+User=rmm-agent
+Group=rmm-agent
+
+# Runtime directories (systemd creates these automatically)
+RuntimeDirectory=rmm-agent
+ConfigurationDirectory=rmm-agent
+StateDirectory=rmm-agent
+LogsDirectory=rmm-agent
+
+# Security hardening
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+
+# Allow writing to config directory (for api_key persistence)
+ReadWritePaths=/etc/rmm-agent
+ReadWritePaths=/var/lib/rmm-agent
+
+# Watchdog - systemd kills service if no ping in 90 seconds
+# Agent must send WATCHDOG=1 every interval/2 (~45 seconds)
+WatchdogSec=90s
+
+# Notify access - allow main process to send sd_notify
+NotifyAccess=main
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=256M
+
+# Environment
+Environment=HOME=/var/lib/rmm-agent
+
+[Install]
+WantedBy=multi-user.target

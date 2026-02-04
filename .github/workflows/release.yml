@@ -1,0 +1,154 @@
+# GitHub Actions Workflow: Agent Release
+#
+# Builds and releases agent binaries when a version tag is pushed.
+# Creates GitHub release with:
+# - Linux amd64 binary
+# - Linux arm64 binary
+# - manifest.json with SHA256 checksums
+#
+# After release, notifies the RMM server to auto-create rollouts.
+#
+# Usage:
+#   git tag v5.2.0
+#   git push origin v5.2.0
+#
+# Required secrets:
+#   RMM_RELEASE_WEBHOOK_SECRET - Shared secret for server notification
+#   RMM_SERVER_URL - Server URL (e.g., https://app.linuxrmm.io)
+
+name: Release Agent
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Build Linux amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o rmm-agent-linux-amd64 \
+            ./cmd/agent
+
+      - name: Build Linux arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o rmm-agent-linux-arm64 \
+            ./cmd/agent
+
+      - name: Generate checksums
+        run: |
+          sha256sum rmm-agent-linux-amd64 > checksums.txt
+          sha256sum rmm-agent-linux-arm64 >> checksums.txt
+          cat checksums.txt
+
+      - name: Generate manifest.json
+        run: |
+          AMD64_SHA=$(sha256sum rmm-agent-linux-amd64 | cut -d' ' -f1)
+          ARM64_SHA=$(sha256sum rmm-agent-linux-arm64 | cut -d' ' -f1)
+
+          cat > manifest.json << EOF
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "generatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "generatedBy": "github-actions",
+            "tagName": "v${{ steps.version.outputs.version }}",
+            "binaries": {
+              "linux-amd64": {
+                "filename": "rmm-agent-linux-amd64",
+                "sha256": "${AMD64_SHA}"
+              },
+              "linux-arm64": {
+                "filename": "rmm-agent-linux-arm64",
+                "sha256": "${ARM64_SHA}"
+              }
+            }
+          }
+          EOF
+
+          cat manifest.json
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Agent v${{ steps.version.outputs.version }}
+          body: |
+            ## RMM Agent v${{ steps.version.outputs.version }}
+
+            ### Binaries
+            - `rmm-agent-linux-amd64` - Linux x86_64
+            - `rmm-agent-linux-arm64` - Linux ARM64
+
+            ### Checksums
+            See `checksums.txt` or `manifest.json` for SHA256 checksums.
+
+            ### Installation
+            Download the appropriate binary for your platform and install:
+            ```bash
+            curl -L -o /usr/local/bin/rmm-agent \
+              https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/rmm-agent-linux-amd64
+            chmod +x /usr/local/bin/rmm-agent
+            ```
+          files: |
+            rmm-agent-linux-amd64
+            rmm-agent-linux-arm64
+            checksums.txt
+            manifest.json
+          draft: false
+          prerelease: false
+
+      - name: Notify RMM server of new release
+        if: ${{ vars.RMM_SERVER_URL }}
+        env:
+          RMM_SERVER_URL: ${{ vars.RMM_SERVER_URL }}
+          RMM_RELEASE_WEBHOOK_SECRET: ${{ secrets.RMM_RELEASE_WEBHOOK_SECRET }}
+        run: |
+          AMD64_SHA=$(sha256sum rmm-agent-linux-amd64 | cut -d' ' -f1)
+          ARM64_SHA=$(sha256sum rmm-agent-linux-arm64 | cut -d' ' -f1)
+
+          echo "Notifying RMM server of release v${{ steps.version.outputs.version }}..."
+
+          curl -X POST "${RMM_SERVER_URL}/api/agent-releases/notify" \
+            -H "Content-Type: application/json" \
+            -H "X-Release-Token: ${RMM_RELEASE_WEBHOOK_SECRET}" \
+            -d "{
+              \"version\": \"${{ steps.version.outputs.version }}\",
+              \"checksums\": {
+                \"linux-amd64\": \"${AMD64_SHA}\",
+                \"linux-arm64\": \"${ARM64_SHA}\"
+              }
+            }" \
+            --fail --silent --show-error
+
+          echo "Server notified successfully - rollouts will be auto-created"
