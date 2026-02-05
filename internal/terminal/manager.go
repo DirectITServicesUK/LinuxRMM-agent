@@ -106,10 +106,12 @@ func (m *Manager) StartSession(sessionID, shell string, cols, rows uint16) error
 		"COLORTERM=truecolor",
 	)
 
-	// Create new process group so we can kill all children on cleanup
-	// This helps prevent orphaned processes if the agent crashes
+	// Note: We previously used Setpgid: true to create a new process group
+	// for cleanup purposes, but this can cause "operation not permitted" errors
+	// on some systems (especially virtualized environments like Hyper-V/Azure).
+	// The PTY library handles process cleanup adequately without it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
+		Setsid: true, // Create new session instead (works better across environments)
 	}
 
 	// Start with PTY
