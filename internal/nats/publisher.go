@@ -247,6 +247,25 @@ func (p *Publisher) PublishStatsData(data stats.StatsData) error {
 	return p.PublishStats(msg)
 }
 
+// PublishProcessList publishes the list of running processes.
+// Uses core NATS for real-time response to process list requests.
+func (p *Publisher) PublishProcessList(msg *ProcessListMessage) error {
+	subject := fmt.Sprintf("rmm.%s.processes.%s", p.client.TenantID(), p.client.AgentID())
+
+	envelope := MessageEnvelope{
+		Type:      "process_list",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	payloadBytes, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+	envelope.Payload = payloadBytes
+
+	return p.publish(subject, envelope)
+}
+
 // PublishSystemInfo publishes static system information.
 // Uses core NATS since system info is non-critical and changes infrequently.
 // Accepts sysinfo.SystemInfoMessage to satisfy the sysinfo.SysInfoPublisher interface.

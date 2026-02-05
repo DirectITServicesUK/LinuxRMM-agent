@@ -149,5 +149,31 @@ type UninstallConfirmMessage struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// Process management message types
+
+// ProcessListRequestMessage requests process list from agent.
+type ProcessListRequestMessage struct {
+	RequestID string `json:"requestId"`
+}
+
+// ProcessInfo contains information about a single process.
+type ProcessInfo struct {
+	PID        int32   `json:"pid"`
+	Name       string  `json:"name"`
+	Username   string  `json:"username"`
+	CPUPercent float64 `json:"cpuPercent"`
+	MemPercent float32 `json:"memPercent"`
+	Cmdline    string  `json:"cmdline"`
+	Status     string  `json:"status"`
+}
+
+// ProcessListMessage contains the list of running processes.
+type ProcessListMessage struct {
+	RequestID string        `json:"requestId"`
+	Processes []ProcessInfo `json:"processes"`
+	AgentPID  int32         `json:"agentPid"`
+	Timestamp string        `json:"timestamp"`
+}
+
 // Note: SystemInfoMessage is defined in internal/sysinfo/reporter.go
 // The NATS publisher uses sysinfo.SystemInfoMessage directly to avoid duplication.

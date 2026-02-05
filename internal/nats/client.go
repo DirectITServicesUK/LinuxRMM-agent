@@ -49,6 +49,8 @@ type MessageHandler interface {
 	HandleSchedule(schedule *ScheduleMessage) error
 	// HandleUninstall processes an uninstall command.
 	HandleUninstall(msg *UninstallMessage) error
+	// HandleProcessListRequest processes a process list request.
+	HandleProcessListRequest(msg *ProcessListRequestMessage) error
 }
 
 // TerminalMessageHandler processes terminal-related messages.
@@ -71,6 +73,7 @@ type Client struct {
 	handler          MessageHandler
 	terminalHandler  TerminalMessageHandler
 	terminalSubs     []*nats.Subscription
+	processSub       *nats.Subscription
 	mu               sync.RWMutex
 	running          bool
 	stopChan         chan struct{}
@@ -246,6 +249,12 @@ func (c *Client) Run(ctx context.Context) {
 		// Continue without terminal - it's not critical
 	}
 
+	// Set up process list subscription (core NATS for real-time requests)
+	if err := c.setupProcessSubscription(); err != nil {
+		c.logger.Error("Failed to setup process subscription", slog.String("error", err.Error()))
+		// Continue without process list - it's not critical
+	}
+
 	// Start consuming messages
 	c.consumeMessages(ctx)
 }
@@ -369,6 +378,79 @@ func (c *Client) setupTerminalSubscriptions() error {
 	)
 
 	return nil
+}
+
+// setupProcessSubscription creates a subscription for process list requests.
+// Uses core NATS (not JetStream) for real-time request/response.
+func (c *Client) setupProcessSubscription() error {
+	c.mu.RLock()
+	handler := c.handler
+	c.mu.RUnlock()
+
+	if handler == nil {
+		c.logger.Debug("No message handler set, skipping process subscription")
+		return nil
+	}
+
+	subject := fmt.Sprintf("rmm.%s.process_request.%s", c.config.TenantID, c.config.AgentID)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	sub, err := c.nc.Subscribe(subject, func(msg *nats.Msg) {
+		c.handleProcessMessage(msg)
+	})
+	if err != nil {
+		return fmt.Errorf("subscribe %s: %w", subject, err)
+	}
+	c.processSub = sub
+
+	c.logger.Info("Process subscription ready",
+		slog.String("subject", subject),
+	)
+
+	return nil
+}
+
+// handleProcessMessage processes a process list request from core NATS.
+func (c *Client) handleProcessMessage(msg *nats.Msg) {
+	c.mu.RLock()
+	handler := c.handler
+	c.mu.RUnlock()
+
+	if handler == nil {
+		return
+	}
+
+	// Parse message envelope
+	var envelope MessageEnvelope
+	if err := json.Unmarshal(msg.Data, &envelope); err != nil {
+		c.logger.Warn("Invalid process message",
+			slog.String("subject", msg.Subject),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	c.logger.Debug("Processing process message",
+		slog.String("type", envelope.Type),
+		slog.String("subject", msg.Subject),
+	)
+
+	switch envelope.Type {
+	case "process_list_request":
+		var reqMsg ProcessListRequestMessage
+		if err := json.Unmarshal(envelope.Payload, &reqMsg); err != nil {
+			c.logger.Warn("Invalid process_list_request payload", slog.String("error", err.Error()))
+			return
+		}
+		if err := handler.HandleProcessListRequest(&reqMsg); err != nil {
+			c.logger.Error("Failed to handle process list request", slog.String("error", err.Error()))
+		}
+
+	default:
+		c.logger.Warn("Unknown process message type", slog.String("type", envelope.Type))
+	}
 }
 
 // handleTerminalMessage processes a terminal message from core NATS.
@@ -618,6 +700,12 @@ func (c *Client) Close() error {
 		sub.Unsubscribe()
 	}
 	c.terminalSubs = nil
+
+	// Unsubscribe from process subject
+	if c.processSub != nil {
+		c.processSub.Unsubscribe()
+		c.processSub = nil
+	}
 
 	if c.nc != nil {
 		c.nc.Drain()

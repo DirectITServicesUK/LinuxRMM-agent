@@ -20,6 +20,7 @@ import (
 	"github.com/doughall/linuxrmm/agent/internal/executor"
 	"github.com/doughall/linuxrmm/agent/internal/helper"
 	"github.com/doughall/linuxrmm/agent/internal/scheduler"
+	"github.com/doughall/linuxrmm/agent/internal/stats"
 )
 
 // Handler processes incoming NATS messages.
@@ -305,6 +306,63 @@ func getTime(m map[string]any, key string) time.Time {
 		}
 	}
 	return time.Now()
+}
+
+// HandleProcessListRequest processes a process list request from the server.
+// Collects running processes and publishes the response via NATS.
+func (h *Handler) HandleProcessListRequest(msg *ProcessListRequestMessage) error {
+	h.logger.Info("received process list request",
+		slog.String("request_id", msg.RequestID),
+	)
+
+	// Collect process information
+	collector := stats.NewProcessCollector(h.logger)
+	processes, agentPID, err := collector.Collect(context.Background())
+	if err != nil {
+		h.logger.Error("failed to collect processes",
+			slog.String("error", err.Error()),
+		)
+		return err
+	}
+
+	// Convert stats.ProcessInfo to nats.ProcessInfo
+	natsProcesses := make([]ProcessInfo, len(processes))
+	for i, p := range processes {
+		natsProcesses[i] = ProcessInfo{
+			PID:        p.PID,
+			Name:       p.Name,
+			Username:   p.Username,
+			CPUPercent: p.CPUPercent,
+			MemPercent: p.MemPercent,
+			Cmdline:    p.Cmdline,
+			Status:     p.Status,
+		}
+	}
+
+	// Build response message
+	response := &ProcessListMessage{
+		RequestID: msg.RequestID,
+		Processes: natsProcesses,
+		AgentPID:  agentPID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Publish via NATS
+	if h.natsPublisher != nil {
+		if err := h.natsPublisher.PublishProcessList(response); err != nil {
+			h.logger.Error("failed to publish process list",
+				slog.String("error", err.Error()),
+			)
+			return err
+		}
+	}
+
+	h.logger.Info("process list published",
+		slog.String("request_id", msg.RequestID),
+		slog.Int("process_count", len(natsProcesses)),
+	)
+
+	return nil
 }
 
 // HandleUninstall processes an uninstall command from the server.
