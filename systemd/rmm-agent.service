@@ -49,5 +49,20 @@ LimitNOFILE=65535
 # Environment
 Environment=HOME=/var/lib/rmm-agent
 
+# Security settings for full system management
+# The agent runs as root and needs unrestricted access for:
+# - Interactive terminal sessions (PTY/forkpty)
+# - Process management
+# - Package installation
+# - Service management
+#
+# Explicitly disable sandboxing that would prevent PTY allocation
+NoNewPrivileges=no
+RestrictSUIDSGID=no
+PrivateDevices=no
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectControlGroups=no
+
 [Install]
 WantedBy=multi-user.target
