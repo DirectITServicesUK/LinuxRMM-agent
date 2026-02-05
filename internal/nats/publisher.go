@@ -6,6 +6,7 @@
 package nats
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/doughall/linuxrmm/agent/internal/stats"
 	"github.com/doughall/linuxrmm/agent/internal/sysinfo"
-	"github.com/nats-io/nats.go"
 )
 
 // Publisher handles publishing messages to NATS.
@@ -169,7 +169,7 @@ func (p *Publisher) publishJetStream(subject string, msg MessageEnvelope) error 
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	ctx := nats.Context(nil) // Use default context
+	ctx := context.Background()
 	ack, err := js.Publish(ctx, subject, data)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
