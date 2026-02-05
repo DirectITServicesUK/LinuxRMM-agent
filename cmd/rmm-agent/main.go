@@ -334,6 +334,10 @@ func main() {
 			natsHandler := natsinternal.NewHandler(httpClient, natsPublisher, dedup, scheduleCache, logger)
 			natsClient.SetHandler(natsHandler)
 
+			// Create terminal handler for interactive terminal sessions
+			terminalHandler := natsinternal.NewTerminalHandler(natsPublisher, logger)
+			natsClient.SetTerminalHandler(terminalHandler)
+
 			coordinator.Register("nats", natsClient)
 			logger.Info("NATS client initialized")
 		}
